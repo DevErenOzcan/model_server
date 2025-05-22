@@ -2,7 +2,27 @@ from flask import Flask, request, jsonify
 from ultralytics import YOLO
 import cv2
 import numpy as np
+import os
+from flask_sqlalchemy import SQLAlchemy
+
+
 app = Flask(__name__)
+
+# Veritabanı yolunu ayarla
+basedir = os.path.abspath(os.path.dirname(__file__))
+db_path = os.path.join(basedir, 'db.sqlite')
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///' + db_path
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+
+# SQLAlchemy başlat
+db = SQLAlchemy(app)
+
+class DetectionResult(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    is_defected = db.Column(db.Boolean, nullable=False)
+    defect_type = db.Column(db.String(100), nullable=False)
+    defect_percentage = db.Column(db.Float, nullable=False)
+
 
 model = YOLO('best.pt')
 threshold = 0.5
@@ -35,6 +55,7 @@ def upload_image():
         score = float(box.conf[0])
         is_defected = score > threshold
 
+        # JSON cevabı
         final_results = {
             "status": "success",
             "is_defected": is_defected,
@@ -42,7 +63,19 @@ def upload_image():
             "defect_percentage": score,
         }
 
+        # Veritabanına kaydet
+        detection = DetectionResult(
+            is_defected=is_defected,
+            defect_type=class_name,
+            defect_percentage=score
+        )
+        db.session.add(detection)
+        db.session.commit()
+
+        break  # Sadece ilk kutuyu kaydet
+
     return jsonify(final_results), 200
+
 
 
 
