@@ -1,42 +1,70 @@
 from flask import Flask, request, jsonify
-import os
-import random
-
+from ultralytics import YOLO
+import cv2
+import numpy as np
 app = Flask(__name__)
-UPLOAD_FOLDER = "uploads"
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+
+model = YOLO('best.pt')
+threshold = 0.5
 
 
 @app.route('/upload_from_unity', methods=['POST'])
 def upload_image():
+    global threshold
+
     if 'image' not in request.files:
         return jsonify({"status": "error", "message": "No image part"}), 400
 
-    image = request.files['image']
-    if image.filename == '':
+    file = request.files['image']
+    if file.filename == '':
         return jsonify({"status": "error", "message": "No selected file"}), 400
 
-    filepath = os.path.join(UPLOAD_FOLDER, image.filename)
-    image.save(filepath)
+    image_bytes = file.read()
+    npimg = np.frombuffer(image_bytes, np.uint8)
+    frame = cv2.imdecode(npimg, cv2.IMREAD_COLOR)
 
-    # Rastgele hata yüzdesi üret (0-100 arası)
-    defect_percentage = random.randint(0, 100)
+    if frame is None:
+        return jsonify({'error': 'Invalid image'}), 400
 
-    # Eşik değeri (threshold) - %10'un altındakiler sağlam kabul edilecek
-    threshold = 10
+    model_results = model(frame)
+    final_results = {}
 
-    # Sonuç belirleme
-    is_defective = defect_percentage > threshold
-    result_status = "defective" if is_defective else "okey"
+    for box in model_results[0].boxes:
+        cls_id = int(box.cls[0])
+        class_name = model.model.names[cls_id]
+        score = float(box.conf[0])
+        is_defected = score > threshold
 
-    return jsonify({
-        "status": "success",
-        "result": result_status,
-        "defect_percentage": defect_percentage,
-        "threshold": threshold,
-        "message": f"Image processed, defect: {defect_percentage}%"
-    }), 200
+        final_results = {
+            "status": "success",
+            "is_defected": is_defected,
+            "defect_type": class_name,
+            "defect_percentage": score,
+        }
+
+    return jsonify(final_results), 200
 
 
-if __name__ == '_main_':
+
+@app.route('/update_threshold', methods=['POST'])
+def update_threshold():
+    global threshold
+
+    data = request.get_json()
+
+    if not data:
+        return jsonify({'error': 'JSON body missing'}), 400
+
+    if 'threshold' not in data:
+        return jsonify({'error': 'Missing "threshold" field in JSON'}), 400
+
+    threshold_value = data['threshold']
+    threshold = threshold_value
+
+    return jsonify({'message': 'Threshold received', 'threshold': threshold}), 200
+
+
+
+
+if __name__ == '__main__':
     app.run(debug=True)
